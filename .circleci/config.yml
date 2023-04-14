@@ -15,7 +15,7 @@ jobs:
     steps:
       - checkout
       - run:
-          name: "Say hello"
+          name: "compile"
           command: "./compile.sh BOARD=rock-5b BRANCH=legacy RELEASE=bullseye BUILD_ONLY=kernel BUILD_MINIMAL=no BUILD_DESKTOP=no KERNEL_CONFIGURE=no COMPRESS_OUTPUTIMAGE=sha,img"
 
 # Orchestrate jobs using workflows
@@ -23,4 +23,4 @@ jobs:
 workflows:
   say-hello-workflow:
     jobs:
-      - say-hello
+      - compile
