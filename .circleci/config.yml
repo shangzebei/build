@@ -15,6 +15,8 @@ jobs:
     steps:
       - checkout
       - run:
+          environment: 
+            GITHUB_OUTPUT: .
           name: "compile"
           command: "./compile.sh BOARD=rock-5b BRANCH=legacy RELEASE=bullseye BUILD_ONLY=kernel BUILD_MINIMAL=no BUILD_DESKTOP=no KERNEL_CONFIGURE=no COMPRESS_OUTPUTIMAGE=sha,img"
 
