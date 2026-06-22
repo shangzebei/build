@@ -55,13 +55,9 @@ jobs:
         run: |
           docker run --rm \
             --privileged \
-            -v /dev:/dev \
             -v "${{ github.workspace }}":/armbian \
-            -v "${{ github.workspace }}/output":/armbian/output \
-            -v "${{ github.workspace }}/cache":/armbian/cache \
-            -v "${{ github.workspace }}/userpatches":/armbian/userpatches \
             ghcr.io/armbian/docker-armbian-build:armbian-ubuntu-noble-latest \
-            ./compile.sh build BOARD=rock-5b BRANCH=edge SHARE_LOG=yes
+            ./compile.sh build BOARD=rock-5b BRANCH=edge KERNEL_CONFIGURE=no SHARE_LOG=yes
 
       - name: Upload artifacts
         if: always()
