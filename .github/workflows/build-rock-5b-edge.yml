@@ -58,6 +58,10 @@ jobs:
         run: |
           docker run --rm \
             --privileged \
+            --security-opt apparmor:unconfined \
+            --device-cgroup-rule='b 7:* rmw' \
+            --device-cgroup-rule='b 259:* rmw' \
+            -v /dev:/tmp/dev:ro \
             -v "${{ github.workspace }}":/armbian \
             ghcr.io/armbian/docker-armbian-build:armbian-ubuntu-noble-latest \
             ./compile.sh build BOARD=rock-5b BRANCH=edge RELEASE=noble BUILD_DESKTOP=no BUILD_MINIMAL=yes KERNEL_CONFIGURE=no SHARE_LOG=yes
