@@ -57,7 +57,7 @@ jobs:
             --privileged \
             -v "${{ github.workspace }}":/armbian \
             ghcr.io/armbian/docker-armbian-build:armbian-ubuntu-noble-latest \
-            ./compile.sh build BOARD=rock-5b BRANCH=edge KERNEL_CONFIGURE=no SHARE_LOG=yes
+            ./compile.sh build BOARD=rock-5b BRANCH=edge RELEASE=noble BUILD_DESKTOP=no BUILD_MINIMAL=yes KERNEL_CONFIGURE=no SHARE_LOG=yes
 
       - name: Upload artifacts
         if: always()
