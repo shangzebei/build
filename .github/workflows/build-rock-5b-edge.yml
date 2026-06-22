@@ -1,0 +1,80 @@
+name: Build rock-5b edge
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'config/boards/rock-5b.*'
+      - 'config/kernel/**'
+      - 'config/sources/**'
+      - 'patch/**'
+      - 'lib/**'
+      - 'extensions/**'
+      - 'packages/**'
+      - 'compile.sh'
+      - '.github/workflows/build-rock-5b-edge.yml'
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - 'config/boards/rock-5b.*'
+      - 'config/kernel/**'
+      - 'config/sources/**'
+      - 'patch/**'
+      - 'lib/**'
+      - 'extensions/**'
+      - 'packages/**'
+      - 'compile.sh'
+      - '.github/workflows/build-rock-5b-edge.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Free disk space
+        uses: descriptinc/free-disk-space@1b4b157593c6801212a2ed488c205e0a810b4592
+        with:
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+
+      - name: Pull build container
+        run: docker pull ghcr.io/armbian/docker-armbian-build:armbian-ubuntu-noble-latest
+
+      - name: Build rock-5b edge
+        run: |
+          docker run --rm \
+            --privileged \
+            -v /dev:/dev \
+            -v "${{ github.workspace }}":/armbian \
+            -v "${{ github.workspace }}/output":/armbian/output \
+            -v "${{ github.workspace }}/cache":/armbian/cache \
+            -v "${{ github.workspace }}/userpatches":/armbian/userpatches \
+            ghcr.io/armbian/docker-armbian-build:armbian-ubuntu-noble-latest \
+            ./compile.sh build BOARD=rock-5b BRANCH=edge SHARE_LOG=yes
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rock-5b-edge-images
+          path: output/images/
+          retention-days: 7
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rock-5b-edge-logs
+          path: output/logs/
+          retention-days: 7
