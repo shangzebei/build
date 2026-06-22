@@ -48,6 +48,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up QEMU binfmt
+        uses: docker/setup-qemu-action@v3
+
       - name: Pull build container
         run: docker pull ghcr.io/armbian/docker-armbian-build:armbian-ubuntu-noble-latest
 
