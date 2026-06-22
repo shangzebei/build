@@ -1,29 +1,29 @@
 #!/usr/bin/env bash
 # This runs *after* user_config. Don't change anything not coming from other variables or meant to be configured by the user.
 function extension_prepare_config__prepare_grub-riscv64() {
-	display_alert "Prepare config" "${EXTENSION}" "info"
+	display_alert "Extension: ${EXTENSION}: Prepare config" "${EXTENSION}" "info"
 	# Extension configuration defaults.
-	export DISTRO_GENERIC_KERNEL=${DISTRO_GENERIC_KERNEL:-no}             # if yes, does not build our own kernel, instead, uses generic one from distro
-	export UEFI_GRUB_TERMINAL="${UEFI_GRUB_TERMINAL:-serial console}"     # 'serial' forces grub menu on serial console. empty to not include
-	export UEFI_GRUB_DISABLE_OS_PROBER="${UEFI_GRUB_DISABLE_OS_PROBER:-}" # 'true' will disable os-probing, useful for SD cards.
-	export UEFI_GRUB_DISTRO_NAME="${UEFI_GRUB_DISTRO_NAME:-Armbian}"      # Will be used on grub menu display
-	export UEFI_GRUB_TIMEOUT=${UEFI_GRUB_TIMEOUT:-0}                      # Small timeout by default
-	export GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT:-""}" # Cmdline by default
+	declare -g DISTRO_GENERIC_KERNEL=${DISTRO_GENERIC_KERNEL:-no}             # if yes, does not build our own kernel, instead, uses generic one from distro
+	declare -g UEFI_GRUB_TERMINAL="${UEFI_GRUB_TERMINAL:-serial console}"     # 'serial' forces grub menu on serial console. empty to not include
+	declare -g UEFI_GRUB_DISABLE_OS_PROBER="${UEFI_GRUB_DISABLE_OS_PROBER:-}" # 'true' will disable os-probing, useful for SD cards.
+	declare -g UEFI_GRUB_DISTRO_NAME="${UEFI_GRUB_DISTRO_NAME:-Armbian}"      # Will be used on grub menu display
+	declare -g UEFI_GRUB_TIMEOUT=${UEFI_GRUB_TIMEOUT:-0}                      # Small timeout by default
+	declare -g GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT:-""}" # Cmdline by default
 	# User config overrides.
-	export BOOTCONFIG="none"                                                     # To try and convince lib/ to not build or install u-boot.
-	unset BOOTSOURCE                                                             # To try and convince lib/ to not build or install u-boot.
-	export IMAGE_PARTITION_TABLE="gpt"                                           # GPT partition table is essential for many UEFI-like implementations, eg Apple+Intel stuff.
-	export UEFISIZE=256                                                          # in MiB - grub EFI is tiny - but some EFI BIOSes ignore small too small EFI partitions
-	export BOOTSIZE=0                                                            # No separate /boot when using UEFI.
-	export CLOUD_INIT_CONFIG_LOCATION="${CLOUD_INIT_CONFIG_LOCATION:-/boot/efi}" # use /boot/efi for cloud-init as default when using Grub.
-	export EXTRA_BSP_NAME="${EXTRA_BSP_NAME}-grub"                               # Unique bsp name.
-	export UEFI_GRUB_TARGET="riscv64-efi"                                        # Default for x86_64
-
-	if [[ "${DISTRIBUTION}" != "Ubuntu" && "${BUILDING_IMAGE}" == "yes" ]]; then
-		exit_with_error "${DISTRIBUTION} is not supported yet"
+	declare -g BOOTCONFIG="none"                                                     # To try and convince lib/ to not build or install u-boot.
+	unset BOOTSOURCE                                                                 # To try and convince lib/ to not build or install u-boot.
+	declare -g IMAGE_PARTITION_TABLE="gpt"                                           # GPT partition table is essential for many UEFI-like implementations, eg Apple+Intel stuff.
+	declare -g UEFISIZE=256                                                          # in MiB - grub EFI is tiny - but some EFI BIOSes ignore small too small EFI partitions
+	declare -g BOOTSIZE=0                                                            # No separate /boot when using UEFI.
+	if [[ $BOOTPART_REQUIRED == "yes" ]]; then
+		# It is important to place this into /boot to have unified boot partition, especially when CRYPTROOT is used
+		declare -g UEFI_MOUNT_POINT=/boot
 	fi
+	declare -g CLOUD_INIT_CONFIG_LOCATION="${CLOUD_INIT_CONFIG_LOCATION:-/boot/efi}" # use /boot/efi for cloud-init as default when using Grub.
+	declare -g EXTRA_BSP_NAME="${EXTRA_BSP_NAME}-grub"                               # Unique bsp name.
+	declare -g UEFI_GRUB_TARGET="riscv64-efi"                                        # Default for x86_64
 
-	add_packages_to_image efibootmgr efivar cloud-initramfs-growroot os-prober "grub-efi-${ARCH}-bin" "grub-efi-${ARCH}"
+	add_packages_to_image efibootmgr efivar cloud-initramfs-growroot busybox os-prober "grub-efi-${ARCH}-bin" "grub-efi-${ARCH}"
 
 	display_alert "Activating" "GRUB with SERIALCON=${SERIALCON}; timeout ${UEFI_GRUB_TIMEOUT}; target=${UEFI_GRUB_TARGET}" ""
 }
@@ -32,10 +32,10 @@ pre_umount_final_image__install_grub() {
 
 	configure_grub
 	local chroot_target="${MOUNT}"
-	display_alert "Installing bootloader" "GRUB" "info"
+	display_alert "Extension: ${EXTENSION}: Installing bootloader" "GRUB" "info"
 
 	# RiscV64 specific: actually copy the DTBs to the ESP
-	display_alert "Copying DTBs to ESP" "${EXTENSION}" "info"
+	display_alert "Extension: ${EXTENSION}: Copying DTBs to ESP" "${EXTENSION}" "info"
 	run_host_command_logged mkdir -pv "${chroot_target}"/boot/efi/dtb
 	run_host_command_logged cp -rpv "${chroot_target}"/boot/dtb/* "${chroot_target}"/boot/efi/dtb/
 	# RiscV64 specific: @TODO ??? what is this ??
@@ -59,17 +59,22 @@ pre_umount_final_image__install_grub() {
 	# Irony: let's use grub-probe to find out the UUID of the root partition, and then create a symlink to it.
 	# Another: on some systems (eg, not Docker) the thing might already exist due to udev actually working.
 	# shellcheck disable=SC2016 # some wierd escaping going on there.
+	# Root is needed so that UUID of the unlocked /dev/mapper/armbian-root is discovered by grub-update,
+	# UUID is then put into grub.cfg instead of raw /dev/mapper/armbian-root which will fail further sanity check
 	chroot_custom "$chroot_target" mkdir -pv '/dev/disk/by-uuid/"$(grub-probe --target=fs_uuid /)"' "||" true
+	# Include /boot that might point to a separate boot partition in case one exists (lvm, cryptroot)
+	# Even if boot partition doesn't exist - the command will be the same as mkdir for / above
+	chroot_custom "$chroot_target" mkdir -pv '/dev/disk/by-uuid/"$(grub-probe --target=fs_uuid /boot)"' "||" true
 
-	display_alert "Creating GRUB config..." "${EXTENSION}: grub-mkconfig / update-grub"
+	display_alert "Extension: ${EXTENSION}: Creating GRUB config..." "${EXTENSION}: grub-mkconfig / update-grub"
 	chroot_custom "$chroot_target" update-grub || {
 		exit_with_error "update-grub failed!"
 	}
 
-	local install_grub_cmdline="grub-install --target=${UEFI_GRUB_TARGET} --no-nvram --removable" # nvram is global to the host, even across chroot. take care.
-	display_alert "Installing GRUB EFI..." "${EXTENSION}: ${UEFI_GRUB_TARGET}"
+	local install_grub_cmdline="grub-install --target=${UEFI_GRUB_TARGET} --efi-directory=${UEFI_MOUNT_POINT} --no-nvram --removable" # nvram is global to the host, even across chroot. take care.
+	display_alert "Extension: ${EXTENSION}: Installing GRUB EFI..." "${EXTENSION}: ${UEFI_GRUB_TARGET}"
 	chroot_custom "$chroot_target" "$install_grub_cmdline" || {
-		exit_with_error "${install_grub_cmdline} failed!"
+		exit_with_error "Extension: ${EXTENSION}: ${install_grub_cmdline} failed!"
 	}
 
 	### Sanity check. The produced "/boot/grub/grub.cfg" should:
@@ -77,23 +82,23 @@ pre_umount_final_image__install_grub() {
 
 	# - NOT have any mention of `/dev` inside; otherwise something is going to fail
 	if grep -q '/dev' "${chroot_target}/boot/grub/grub.cfg"; then
-		display_alert "GRUB sanity check failed" "grub.cfg contains /dev" "err"
+		display_alert "Extension: ${EXTENSION}: GRUB sanity check failed" "grub.cfg contains /dev" "err"
 		SHOW_LOG=yes run_host_command_logged grep '/dev' "${chroot_target}/boot/grub/grub.cfg" "||" true
 		has_failed_sanity_check=1
 	else
-		display_alert "GRUB config sanity check passed" "no '/dev' found in grub.cfg" "info"
+		display_alert "Extension: ${EXTENSION}: GRUB config sanity check passed" "no '/dev' found in grub.cfg" "info"
 	fi
 
 	# - HAVE references to initrd, otherwise going to fail.
 	if ! grep -q 'initrd.img' "${chroot_target}/boot/grub/grub.cfg"; then
-		display_alert "GRUB config sanity check failed" "no initrd.img references found in /boot/grub/grub.cfg" "err"
+		display_alert "Extension: ${EXTENSION}: GRUB config sanity check failed" "no initrd.img references found in /boot/grub/grub.cfg" "err"
 		has_failed_sanity_check=1
 	else
-		display_alert "GRUB config sanity check passed" "initrd.img references found OK in /boot/grub/grub.cfg" "debug"
+		display_alert "Extension: ${EXTENSION}: GRUB config sanity check passed" "initrd.img references found OK in /boot/grub/grub.cfg" "debug"
 	fi
 
 	if [[ ${has_failed_sanity_check} -gt 0 ]]; then
-		exit_with_error "GRUB config sanity check failed, image will be unbootable; see above errors"
+		exit_with_error "Extension: ${EXTENSION}: GRUB config sanity check failed, image will be unbootable; see above errors"
 	fi
 
 	# Remove host-side config.
@@ -107,9 +112,17 @@ configure_grub() {
 	[[ -n "$SERIALCON" ]] &&
 		GRUB_CMDLINE_LINUX_DEFAULT+=" console=${SERIALCON}"
 
-	[[ "$BOOT_LOGO" == "yes" || "$BOOT_LOGO" == "desktop" && "$BUILD_DESKTOP" == "yes" ]] &&
-		GRUB_CMDLINE_LINUX_DEFAULT+=" quiet splash plymouth.ignore-serial-consoles i915.force_probe=* loglevel=3" ||
-		GRUB_CMDLINE_LINUX_DEFAULT+=" splash=verbose i915.force_probe=*"
+	# Kernel cmdline. Always pass the graphical-Plymouth flags
+	# regardless of whether this image is being built as CLI or
+	# desktop — same reasoning as in extensions/grub.sh: users
+	# add a desktop later via armbian-config and we can't
+	# regenerate grub.cfg from there. Plymouth handles the
+	# "no theme installed" / "no DRM" cases gracefully.
+	# (No i915.force_probe here — that's an x86 Intel-graphics
+	# driver knob and is meaningless on riscv64. No 'quiet' /
+	# 'loglevel=3' either: kernel boot messages stay visible
+	# underneath the splash so users can see what's happening.)
+	GRUB_CMDLINE_LINUX_DEFAULT+=" splash plymouth.ignore-serial-consoles"
 
 	# Enable Armbian Wallpaper on GRUB
 	if [[ "${VENDOR}" == Armbian ]]; then
@@ -122,14 +135,17 @@ configure_grub() {
 		run_host_command_logged chmod -v +x "${MOUNT}"/usr/share/desktop-base/grub_background.sh
 	fi
 
-	display_alert "GRUB EFI kernel cmdline" "'${GRUB_CMDLINE_LINUX_DEFAULT}' distro=${UEFI_GRUB_DISTRO_NAME} timeout=${UEFI_GRUB_TIMEOUT}" ""
+	display_alert "Extension: ${EXTENSION}: GRUB EFI kernel cmdline" "'${GRUB_CMDLINE_LINUX_DEFAULT}' distro=${UEFI_GRUB_DISTRO_NAME} timeout=${UEFI_GRUB_TIMEOUT}" ""
 	cat <<- grubCfgFrag >> "${MOUNT}"/etc/default/grub.d/98-armbian.cfg
 		GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT}"
 		GRUB_TIMEOUT_STYLE=menu                                  # Show the menu with Kernel options (Armbian or -generic)...
 		GRUB_TIMEOUT=${UEFI_GRUB_TIMEOUT}                        # ... for ${UEFI_GRUB_TIMEOUT} seconds, then boot the Armbian default.
 		GRUB_DISTRIBUTOR="${UEFI_GRUB_DISTRO_NAME}"              # On GRUB menu will show up as "Armbian GNU/Linux" (will show up in some UEFI BIOS boot menu (F8?) as "armbian", not on others)
+		GRUB_DISABLE_OS_PROBER=false                             # Have to be explicit about enabling os-prober
 		GRUB_GFXMODE=1024x768
-		GRUB_GFXPAYLOAD=keep
+		GRUB_GFXPAYLOAD_LINUX=text                               # See extensions/grub.sh — correct var name is GRUB_GFXPAYLOAD_LINUX, not GRUB_GFXPAYLOAD, and 'text' disables Ubuntu's vt.handoff=7 injection.
+		GRUB_DISABLE_UUID=false  								 # Be explicit about wanting UUID
+		GRUB_DISABLE_LINUX_UUID=false  							 # Be explicit about wanting UUID
 	grubCfgFrag
 
 	if [[ "a${UEFI_GRUB_DISABLE_OS_PROBER}" != "a" ]]; then

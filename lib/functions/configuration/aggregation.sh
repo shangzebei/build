@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: GPL-2.0
 #
-# Copyright (c) 2013-2023 Igor Pecovnik, igor@armbian.com
+# Copyright (c) 2013-2026 Igor Pecovnik, igor@armbian.com
 #
 # This file is a part of the Armbian Build Framework
 # https://github.com/armbian/build/
@@ -57,6 +57,11 @@ function aggregate_all_packages_python() {
 		"OUTPUT=${temp_file_for_aggregation}"
 		"ASSET_LOG_BASE=$(print_current_asset_log_base_file)" # base file name for the asset log; to write .md summaries.
 
+		# Terminal variables
+		"TERM=${TERM}"
+		"COLORFGBG=${COLORFGBG}"
+		"COLUMNS=${COLUMNS:-160}"
+
 		# For the main packages, and others; main packages are not mixed with BOARD or DESKTOP packages.
 		# Results:
 		# - AGGREGATED_DEBOOTSTRAP_COMPONENTS
@@ -84,11 +89,11 @@ function aggregate_all_packages_python() {
 		"EXTRA_PACKAGES_IMAGE=${EXTRA_PACKAGES_IMAGE[*]}"
 		"EXTRA_PACKAGES_IMAGE_REFS=${EXTRA_PACKAGES_IMAGE_REFS[*]}"
 
-		# Desktop stuff; results are not mixed into main packages. Results in AGGREGATED_PACKAGES_DESKTOP.
+		# Desktop: armbian-config owns package lists now; only the
+		# flag and DE name are needed for cache-key computation.
 		"BUILD_DESKTOP=${BUILD_DESKTOP}"
 		"DESKTOP_ENVIRONMENT=${DESKTOP_ENVIRONMENT}"
-		"DESKTOP_ENVIRONMENT_CONFIG_NAME=${DESKTOP_ENVIRONMENT_CONFIG_NAME}"
-		"DESKTOP_APPGROUPS_SELECTED=${DESKTOP_APPGROUPS_SELECTED}"
+		"DESKTOP_TIER=${DESKTOP_TIER}"
 
 		# Those are processed by Python, but not part of rootfs / main packages; results in AGGREGATED_PACKAGES_IMAGE_INSTALL
 		# These two vars are made readonly after sourcing the board / family config, so can't be used in extensions and such.
@@ -96,6 +101,7 @@ function aggregate_all_packages_python() {
 		"PACKAGE_LIST_BOARD=${PACKAGE_LIST_BOARD}"
 
 		# Those are processed by Python, but not part of rootfs / main packages; results in AGGREGATED_PACKAGES_IMAGE_UNINSTALL
+		# TODO: rpardini: the above statement is untrue; those result in removal _from the rootfs_ and not the image. See also artifact_rootfs_config_dump()
 		# These two vars are made readonly after sourcing the board / family config, so can't be used in extensions and such.
 		"PACKAGE_LIST_BOARD_REMOVE=${PACKAGE_LIST_BOARD_REMOVE}"
 		"PACKAGE_LIST_FAMILY_REMOVE=${PACKAGE_LIST_FAMILY_REMOVE}"

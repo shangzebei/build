@@ -2,16 +2,17 @@ enable_extension "image-output-qcow2"
 
 #### *allow extensions to prepare their own config, after user config is done*
 function extension_prepare_config__prepare_utm_config() {
-	export UTM_VM_CPUS="${UTM_VM_CPUS:-4}"        # Number of CPUs
-	export UTM_VM_RAM_GB="${UTM_VM_RAM_GB:-16}"   # RAM in Gigabytes
-	export UTM_KEEP_QCOW2="${UTM_KEEP_QCOW2:-no}" # keep the qcow2 image after conversion to UTM
-	export UTM_KEEP_IMG="${UTM_KEEP_IMG:-no}"     # keep the .img image after conversion to UTM
+	declare -g UTM_VM_CPUS="${UTM_VM_CPUS:-4}"        # Number of CPUs
+	declare -g UTM_VM_RAM_GB="${UTM_VM_RAM_GB:-16}"   # RAM in Gigabytes
+	declare -g UTM_KEEP_QCOW2="${UTM_KEEP_QCOW2:-no}" # keep the qcow2 image after conversion to UTM
+	declare -g UTM_KEEP_IMG="${UTM_KEEP_IMG:-no}"     # keep the .img image after conversion to UTM
 }
 
 function user_config__metadata_cloud_config() {
-	display_alert "Preparing UTM config" "${EXTENSION}" "info"
-	export SERIALCON="ttyS0" # UTM's serial at ttyS0, for x86 @TODO: arm64? ttyAML0?
-	display_alert "Prepared UTM config" "${EXTENSION}: SERIALCON: '${SERIALCON}'" "debug"
+	display_alert "Preparing UTM config for serial console" "${EXTENSION}" "info"
+	declare -g SERIALCON="ttyAMA0"
+	[[ "${ARCH}" == "amd64" ]] && declare -g SERIALCON="ttyS0"
+	display_alert "Prepared UTM config for serial console" "${EXTENSION}: SERIALCON: '${SERIALCON}'" "debug"
 }
 
 #### *custom post build hook*

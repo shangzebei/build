@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: GPL-2.0
 #
-# Copyright (c) 2013-2023 Igor Pecovnik, igor@armbian.com
+# Copyright (c) 2013-2026 Igor Pecovnik, igor@armbian.com
 #
 # This file is a part of the Armbian Build Framework
 # https://github.com/armbian/build/
@@ -17,7 +17,6 @@ function prepare_armbian_mountpoints_description_dict() {
 		"cache"
 		"cache/git-bare"
 		"cache/git-bundles"
-		"cache/toolchain"
 		"cache/aptcache"
 		"cache/rootfs"
 		"cache/initrd"
@@ -29,15 +28,15 @@ function prepare_armbian_mountpoints_description_dict() {
 	)
 
 	declare -A -g ARMBIAN_MOUNTPOINTS_DESC_DICT=(
-		[".tmp"]="docker_kind_linux=anonymous docker_kind_darwin=anonymous"                             # tmpfs, discard, anonymous; whatever you wanna call  it. It just needs to be 100% local to the container, and there's very little value in being able to look at it from the host.
-		["output"]="docker_kind_linux=bind docker_kind_darwin=bind"                                     # catch-all output. specific subdirs are mounted below. it's a bind mount by default on both Linux and Darwin.
-		["output/images"]="docker_kind_linux=bind docker_kind_darwin=bind"                              # 99% of users want this as the result of their build, no matter if it's slow or not. bind on both.
-		["output/debs"]="docker_kind_linux=bind docker_kind_darwin=bind"                                # generated output .deb files. most people are interested in this, to update kernels or dtbs after initial build. bind on both Linux and Darwin.
+		[".tmp"]="docker_kind_linux=anonymous docker_kind_darwin=anonymous" # tmpfs, discard, anonymous; whatever you wanna call  it. It just needs to be 100% local to the container, and there's very little value in being able to look at it from the host.
+		["output"]="docker_kind_linux=bind docker_kind_darwin=bind"         # catch-all output. specific subdirs are mounted below. it's a bind mount by default on both Linux and Darwin.
+		["output/images"]="docker_kind_linux=bind docker_kind_darwin=bind"  # 99% of users want this as the result of their build, no matter if it's slow or not. bind on both.
+		["output/debs"]="docker_kind_linux=bind docker_kind_darwin=bind"    # generated output .deb files. most people are interested in this, to update kernels or dtbs after initial build. bind on both Linux and Darwin.
+		# output/debs-beta ... ! not needed cos "output" is fully mapped above.
 		["output/logs"]="docker_kind_linux=bind docker_kind_darwin=bind"                                # log files produced. 100% of users want this. Bind on both Linux and Darwin. Is used to integrate launcher and actual-build logs, so must exist and work otherwise confusion ensues.
 		["cache"]="docker_kind_linux=bind docker_kind_darwin=namedvolume"                               # catch-all cache, could be bind-mounted or a volume. On Darwin it's too slow to bind-mount, so it's a volume by default. On Linux, it's a bind-mount by default.
 		["cache/git-bare"]="docker_kind_linux=bind docker_kind_darwin=namedvolume"                      # Git bare repos (kernel/u-boot). On Darwin it's too slow to bind-mount, so it's a volume by default. On Linux, it's a bind-mount by default.
 		["cache/git-bundles"]="docker_kind_linux=bind docker_kind_darwin=namedvolume"                   # Downloads of git bundles, can be bind-mounted or a volume. On Darwin it's too slow to bind-mount, so it's a volume by default. On Linux, it's a bind-mount by default.
-		["cache/toolchain"]="docker_kind_linux=bind docker_kind_darwin=namedvolume"                     # toolchain cache, can be bind-mounted or a volume. On Darwin it's too slow to bind-mount, so it's a volume by default. On Linux, it's a bind-mount by default.
 		["cache/aptcache"]="docker_kind_linux=bind docker_kind_darwin=namedvolume"                      # .deb apt cache, replaces apt-cacher-ng. Can be bind-mounted or a volume. On Darwin it's too slow to bind-mount, so it's a volume by default. On Linux, it's a bind-mount by default.
 		["cache/rootfs"]="docker_kind_linux=bind docker_kind_darwin=namedvolume"                        # rootfs .tar.zst cache, can be bind-mounted or a volume. On Darwin it's too slow to bind-mount, so it's a volume by default. On Linux, it's a bind-mount by default.
 		["cache/initrd"]="docker_kind_linux=bind docker_kind_darwin=namedvolume"                        # initrd.img cache, can be bind-mounted or a volume. On Darwin it's too slow to bind-mount, so it's a volume by default. On Linux, it's a bind-mount by default.

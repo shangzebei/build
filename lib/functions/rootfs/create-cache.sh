@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: GPL-2.0
 #
-# Copyright (c) 2013-2023 Igor Pecovnik, igor@armbian.com
+# Copyright (c) 2013-2026 Igor Pecovnik, igor@armbian.com
 #
 # This file is a part of the Armbian Build Framework
 # https://github.com/armbian/build/
@@ -16,28 +16,72 @@ function calculate_rootfs_cache_id() {
 	[[ "x${packages_hash}x" != "xx" ]] && exit_with_error "packages_hash is already set"
 	[[ "x${cache_type}x" != "xx" ]] && exit_with_error "cache_type is already set"
 
+	declare -i short_hash_size=6
+
 	# get the hashes of the lib/ bash sources involved...
 	declare hash_files="undetermined"
 	calculate_hash_for_files "${SRC}"/lib/functions/rootfs/create-cache.sh "${SRC}"/lib/functions/rootfs/rootfs-create.sh
 	declare bash_hash="${hash_files}"
-	declare bash_hash_short="${bash_hash:0:6}"
+	declare bash_hash_short="${bash_hash:0:${short_hash_size}}"
+
+	# hash hooks that affect the rootfs
+	declare -a extension_hooks_to_hash=("custom_apt_repo")
+	declare -a extension_hooks_hashed=("$(dump_extension_method_sources_functions "${extension_hooks_to_hash[@]}")")
+	declare hash_hooks="undetermined"
+	hash_hooks="$(echo "${extension_hooks_hashed[@]}" LANG=${DEST_LANG} | sha256sum | cut -d' ' -f1)"
+	declare hash_hooks_short="${hash_hooks:0:${short_hash_size}}"
 
 	# AGGREGATED_ROOTFS_HASH is produced by aggregation.py
-	# Don't use a dash here, dashes are significant to legacy rootfs cache id's
-	declare -g -r packages_hash="${AGGREGATED_ROOTFS_HASH:0:12}B${bash_hash_short}"
+	declare -g -r packages_hash="${AGGREGATED_ROOTFS_HASH:0:12}-H${hash_hooks_short}-B${bash_hash_short}"
 
 	declare cache_type="cli"
 	[[ ${BUILD_DESKTOP} == yes ]] && cache_type="xfce-desktop"
-	[[ -n ${DESKTOP_ENVIRONMENT} ]] && cache_type="${DESKTOP_ENVIRONMENT}" # @TODO: this is missing "-desktop"
+	[[ -n ${DESKTOP_ENVIRONMENT} ]] && cache_type="${DESKTOP_ENVIRONMENT}-desktop"
 	[[ ${BUILD_MINIMAL} == yes ]] && cache_type="minimal"
 
-	# @TODO: rpardini: allow extensions to modify cache_type, eg, "-cloud-mluc". *think* before doing this
+	# Fold DESKTOP_TIER into the cache name for desktop builds.
+	# tier=minimal, tier=mid and tier=full install different
+	# package sets under the same DE, so they can't share a
+	# cache tarball — otherwise the first tier to build wins and
+	# every subsequent tier of that DE silently reuses its rootfs.
+	if [[ ${BUILD_DESKTOP} == yes && -n ${DESKTOP_TIER} ]]; then
+		cache_type="${cache_type}-${DESKTOP_TIER}"
+	fi
+
+	# Fold a short fingerprint of the resolved armbian-configng
+	# desktop tree into the cache name. The desktop package set is
+	# chosen by configng YAMLs at rootfs-create time
+	# (`armbian-config --api module_desktops install mode=build`),
+	# not by the aggregation layer — so packages_hash and
+	# AGGREGATED_ROOTFS_HASH are blind to configng entirely. Without
+	# this, a configng commit that changes which packages a DE
+	# installs leaves the existing rootfs tarball untouched in the
+	# cache and every subsequent build cache-hits the pre-change
+	# version.
+	#
+	# CONFIGNG_DESKTOPS_HASH is set by artifact_rootfs_config_dump
+	# above from `git log -1 -- tools/modules/desktops/` in the
+	# cache/sources/armbian-configng clone. 8-char prefix keeps
+	# the filename readable while still giving us ~2^32 of
+	# collision resistance — same truncation style the rest of
+	# this file uses for the hash_hooks/bash_hash components.
+	if [[ ${BUILD_DESKTOP} == yes ]]; then
+		declare _configng_fp="${artifact_input_variables[CONFIGNG_DESKTOPS_HASH]:-}"
+		if [[ -n "${_configng_fp}" \
+				&& "${_configng_fp}" != "undetermined" \
+				&& "${_configng_fp}" != "unknown" ]]; then
+			cache_type="${cache_type}-${_configng_fp:0:8}"
+		fi
+	fi
+
+	# allow extensions to modify cache_type, since they may have used add_packages_to_rootfs() or remove_packages()
+	cache_type="${cache_type}${EXTRA_ROOTFS_NAME:-""}"
 
 	declare -g -r cache_type="${cache_type}"
 
-	declare -g -r rootfs_cache_id="${cache_type}-${packages_hash}"
+	declare -g -r rootfs_cache_id="${packages_hash}"
 
-	display_alert "calculate_rootfs_cache_id: done." "rootfs_cache_id: '${rootfs_cache_id}'" "debug"
+	display_alert "calculate_rootfs_cache_id: done." "cache_type: '${cache_type}' - rootfs_cache_id: '${rootfs_cache_id}'" "debug"
 }
 
 # called by artifact-rootfs::artifact_rootfs_build_from_sources()
@@ -57,8 +101,8 @@ function create_new_rootfs_cache() {
 
 	display_alert "Creating new rootfs cache" "'${cache_name}'" "info"
 
-	create_new_rootfs_cache_via_debootstrap # in rootfs-create.sh
-	create_new_rootfs_cache_tarball         # in rootfs-create.sh
+	create_new_rootfs_cache_via_debootstrap # in rootfs-create.sh; deploys & undeploys the qemu binary
+	create_new_rootfs_cache_tarball         # in rootfs-create.sh; no qemu binary available here
 
 	return 0 # protect against possible future short-circuiting above this
 }
@@ -115,7 +159,12 @@ function extract_rootfs_artifact() {
 	run_host_command_logged rm -v "${SDCARD}"/etc/resolv.conf
 	run_host_command_logged echo "nameserver ${NAMESERVER}" ">" "${SDCARD}"/etc/resolv.conf
 
-	create_sources_list "${RELEASE}" "${SDCARD}/"
+	# all sources etc.
+	# armbian repo is NOT yet included here, since we'll be building the image, and don't want the repo interferring.
+	create_sources_list_and_deploy_repo_key "image-early" "${RELEASE}" "${SDCARD}/"
 
 	return 0
 }
+
+# This comment strategically introduced to force a rebuild of all rootfs, as this file's contents are hashed into all rootfs versions.
+# Just a number to force rebuild 005

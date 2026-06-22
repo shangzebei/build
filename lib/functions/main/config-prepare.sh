@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: GPL-2.0
 #
-# Copyright (c) 2013-2023 Igor Pecovnik, igor@armbian.com
+# Copyright (c) 2013-2026 Igor Pecovnik, igor@armbian.com
 #
 # This file is a part of the Armbian Build Framework
 # https://github.com/armbian/build/
@@ -53,7 +53,9 @@ function prep_conf_main_minimal_ni() {
 
 	# needed for most stuff, but not for configdump
 	if [[ "${skip_host_config:-"no"}" != "yes" ]]; then
-		check_basic_host
+		if [[ "${CONFIG_DEFS_ONLY}" != "yes" ]]; then
+			check_basic_host
+		fi
 	fi
 
 	# needed for BOARD= builds.
@@ -119,6 +121,9 @@ function config_source_board_file() {
 		# shellcheck source=/dev/null
 		source "${BOARD_SOURCE_FILE}"
 		sourced_board_configs+=("${BOARD_SOURCE_FILE}")
+
+		declare board_file_sans_src="${BOARD_SOURCE_FILE#${SRC}/}"
+		track_general_config_variables "after sourcing board file ${board_file_sans_src}"
 	done
 
 	# Sanity check: if no board config was sourced, then the board name is invalid
@@ -127,11 +132,14 @@ function config_source_board_file() {
 	# Otherwise publish it as readonly global
 	declare -g -r SOURCED_BOARD_CONFIGS_FILENAME_LIST="${sourced_board_configs[*]}"
 
+	track_general_config_variables "after sourcing board"
+
 	# this is (100%?) rewritten by family config!
 	# answer: this defaults LINUXFAMILY to BOARDFAMILY. that... shouldn't happen, extensions might change it too.
 	# @TODO: better to check for empty after sourcing family config and running extensions, *warning about it*, and only then default to BOARDFAMILY.
 	# this sourced the board config. do_main_configuration will source the (BOARDFAMILY) family file.
 	LINUXFAMILY="${BOARDFAMILY}"
+	track_general_config_variables "after defaulting LINUXFAMILY to BOARDFAMILY"
 
 	# Lets make some variables readonly after sourcing the board file.
 	# We don't want anything changing them, it's exclusively for board config.
@@ -157,6 +165,14 @@ function config_early_init() {
 	declare -g SHOW_WARNING=yes # If you try something that requires EXPERT=yes.
 
 	display_alert "Starting single build process" "${BOARD:-"no BOARD set"}" "info"
+
+	# Do not initialize an empty array if it exists.
+	if [[ "${KERNEL_DRIVERS_SKIP[*]}" == "" ]]; then
+		# Prepare array to be filled in by board/family/extensions
+		declare -g -a KERNEL_DRIVERS_SKIP=()
+	fi
+
+	silent="yes" track_general_config_variables "after config_early_init" # don't log anything, just init the change tracking
 
 	return 0 # protect against eventual shortcircuit above
 }
@@ -185,21 +201,16 @@ function config_post_main() {
 	fi
 
 	if [[ "$BETA" == "yes" ]]; then
+		display_alert "BETA" "BETA==yes, nightly image" "debug"
 		IMAGE_TYPE=nightly
-	elif [ "$BETA" == "no" ] || [ "$RC" == "yes" ]; then
+	elif [[ "$BETA" == "no" ]]; then
+		display_alert "BETA" "BETA==no, stable image" "debug"
 		IMAGE_TYPE=stable
 	else
+		display_alert "BETA" "Not yes nor no, user-built" "debug"
 		IMAGE_TYPE=user-built
 	fi
-
-	declare -g BOOTSOURCEDIR
-	BOOTSOURCEDIR="u-boot-worktree/${BOOTDIR}/$(branch2dir "${BOOTBRANCH}")"
-	if [[ -n $ATFSOURCE ]]; then
-		declare -g ATFSOURCEDIR
-		ATFSOURCEDIR="${ATFDIR}/$(branch2dir "${ATFBRANCH}")"
-	fi
-
-	declare -g CHOSEN_UBOOT=linux-u-boot-${BRANCH}-${BOARD}
+	track_general_config_variables "at beginning of config_post_main"
 
 	# So for kernel full cached rebuilds.
 	# We wanna be able to rebuild kernels very fast. so it only makes sense to use a dir for each built kernel.
@@ -210,9 +221,45 @@ function config_post_main() {
 	# So we gotta explictly know the major.minor to be able to do that scheme.
 	# If we don't know, we could use BRANCH as reference, but that changes over time, and leads to wastage.
 	if [[ "${skip_kernel:-"no"}" != "yes" ]]; then
-		if [[ -n "${KERNELSOURCE}" ]]; then
+
+		# call hooks to do late validation/mutation of sources, branches, patch dirs, etc.
+		call_extension_method "late_family_config" <<- 'LATE_FAMILY_CONFIG'
+			*late defaults/overrides, main hook point for KERNELSOURCE/BRANCH and BOOTSOURCE/BRANCH etc*
+		LATE_FAMILY_CONFIG
+		track_general_config_variables "after late_family_config hooks"
+
+		# We need BOOTDIR and BOOTBRANCH here, bomb if not
+		[[ -z "${BOOTDIR}" ]] && exit_with_error "BOOTDIR not set after late_family_config"
+		[[ -z "${BOOTBRANCH}" ]] && exit_with_error "BOOTBRANCH not set after late_family_config"
+
+		declare -g BOOTSOURCEDIR
+		BOOTSOURCEDIR="u-boot-worktree/${BOOTDIR}/$(branch2dir "${BOOTBRANCH}")"
+
+		if [[ -n $ATFSOURCE ]]; then
+			declare -g ATFSOURCEDIR
+			ATFSOURCEDIR="${ATFDIR}/$(branch2dir "${ATFBRANCH}")"
+		fi
+
+		if [[ -n $CRUSTSOURCE ]]; then
+			declare -g CRUSTSOURCEDIR
+			CRUSTSOURCEDIR="${CRUSTDIR}/$(branch2dir "${CRUSTBRANCH}")"
+		fi
+
+		track_general_config_variables "before handling KERNEL_MAJOR_MINOR in config_post_main"
+
+		if [[ "${KERNELSOURCE}" != 'none' ]]; then
 			if [[ "x${KERNEL_MAJOR_MINOR}x" == "xx" ]]; then
-				exit_with_error "BAD config, missing" "KERNEL_MAJOR_MINOR" "err"
+				display_alert "Problem: after configuration, there's not enough kernel info" "Might happen if you used the wrong BRANCH. Make sure 'BRANCH=${BRANCH}' is valid." "err"
+				# if we have KERNEL_TARGET set.
+				if [[ -n "${KERNEL_TARGET}" ]]; then
+					# Split KERNEL_TARGET by commas, and display each one.
+					declare -a KERNEL_TARGET_ARRAY=()
+					IFS=',' read -ra KERNEL_TARGET_ARRAY <<< "${KERNEL_TARGET}"
+					for i in "${KERNEL_TARGET_ARRAY[@]}"; do
+						display_alert "Valid branches for current board" "BOARD=${BOARD} BRANCH=${i}" "info"
+					done
+				fi
+				exit_with_error "BAD config, missing" "KERNEL_MAJOR_MINOR; check BOARD and BRANCH combination" "err"
 			fi
 			# assume the worst, and all surprises will be happy ones
 			declare -g KERNEL_HAS_WORKING_HEADERS="no"
@@ -254,6 +301,13 @@ function config_post_main() {
 		declare -g ARMBIAN_WILL_BUILD_UBOOT=no
 	fi
 
+	# Do some sanity checks for userspace stuff, if RELEASE/DESKTOP_ENVIRONMENT is set.
+	check_config_userspace_release_and_desktop
+
+	# late Userspace / package list fixes; RELEASE and DISTRIBUTION must be set.
+	fix_userspace_packages_release_and_distro
+
+	track_general_config_variables "before calling extension_finish_config"
 	display_alert "Extensions: finish configuration" "extension_finish_config" "debug"
 	call_extension_method "extension_finish_config" <<- 'EXTENSION_FINISH_CONFIG'
 		*allow extensions a last chance at configuration just before it is done*
@@ -261,6 +315,7 @@ function config_post_main() {
 		This runs *late*, and is the final step before finishing configuration.
 		Don't change anything not coming from other variables or meant to be configured by the user.
 	EXTENSION_FINISH_CONFIG
+	track_general_config_variables "after calling extension_finish_config"
 
 	return 0 # protect against eventual shortcircuit above
 }
@@ -277,6 +332,57 @@ function set_distribution_status() {
 	[[ "${DISTRIBUTION_STATUS}" != "supported" ]] && [[ "${EXPERT}" != "yes" ]] && exit_with_error "Armbian ${RELEASE} is unsupported and, therefore, only available to experts (EXPERT=yes)"
 
 	return 0 # due to last stmt above being a shortcircuit conditional
+}
+
+function check_config_userspace_release_and_desktop() {
+	# Do some sanity checks for userspace stuff.
+	# If RELEASE is set, it must be a valid release.
+	# We'll also check that the RELEASE supports the ARCH.
+	# Then we'll do the same for RELEASE+DESKTOP_ENVIRONMENT and the ARCH.
+	if [[ "${RELEASE}" != "" ]]; then
+		declare release_distro_dir="${SRC}/config/distributions/${RELEASE}"
+		declare release_distro_arches_file="${release_distro_dir}/architectures"
+
+		if [[ ! -d "${release_distro_dir}" ]]; then
+			exit_with_target_not_supported_error "RELEASE '${RELEASE}' is not supported; there is no '${release_distro_dir}' directory."
+		fi
+
+		if [[ ! -f "${release_distro_arches_file}" ]]; then
+			exit_with_target_not_supported_error "RELEASE '${RELEASE}' does not have file ${release_distro_arches_file}"
+		fi
+
+		if grep -q "${ARCH}" "${release_distro_arches_file}"; then
+			display_alert "RELEASE '${RELEASE}' supports ARCH '${ARCH}'" "RELEASE=${RELEASE} ARCH=${ARCH}; see ${release_distro_arches_file}" "debug"
+		else
+			exit_with_target_not_supported_error "RELEASE '${RELEASE}' does not support ARCH '${ARCH}'; see ${release_distro_arches_file}"
+		fi
+
+		# Desktop sanity checks.
+		if [[ "${DESKTOP_ENVIRONMENT}" != "" ]]; then
+			if [[ "${BUILD_DESKTOP}" != "yes" ]]; then
+				exit_with_error "DESKTOP_ENVIRONMENT is set, but BUILD_DESKTOP is not ==yes - please fix your parameters."
+			fi
+			# Validation of (RELEASE, ARCH, DESKTOP_ENVIRONMENT) support is
+			# deferred to armbian-config's module_desktops install call in
+			# distro-agnostic.sh — it checks the YAML definitions and
+			# fails with a clear message if the combo isn't covered.
+		fi
+	fi
+
+	return 0
+}
+
+function fix_userspace_packages_release_and_distro() {
+	display_alert "fix_userspace_packages_release_and_distro" "For distro '${DISTRIBUTION}' release '${RELEASE}'" "debug"
+
+	# Some old hack from the past, not sure if it's still needed. Originally from https://github.com/armbian/build/pull/5881
+	if [[ $RELEASE == trixie || $ARCH == riscv64 ]]; then remove_packages "cpufrequtils"; fi # this will remove from rootfs as well
+
+	# Debian: no need for this package in the rootfs, as it provides add-apt-repository which is not used on our Debian builds
+	if [[ "${DISTRIBUTION}" == "Debian" ]]; then
+		display_alert "Not-installing software-properties-common" "For distro '${DISTRIBUTION}' release '${RELEASE}'" "warn"
+		remove_packages "software-properties-common" "software-properties-gtk" "software-properties-common"
+	fi
 }
 
 # Some utility functions

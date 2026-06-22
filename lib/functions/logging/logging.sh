@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: GPL-2.0
 #
-# Copyright (c) 2013-2023 Igor Pecovnik, igor@armbian.com
+# Copyright (c) 2013-2026 Igor Pecovnik, igor@armbian.com
 #
 # This file is a part of the Armbian Build Framework
 # https://github.com/armbian/build/
@@ -19,13 +19,37 @@ function logging_init() {
 		declare -g SHOW_DEBUG="${SHOW_DEBUG:-"yes"}"
 	fi
 
+	# detect terminal background color
+	case "${COLORFGBG+${COLORFGBG#*;}}" in
+		[0-6] | 8)
+			declare -g background_dark_or_light=dark
+			;;
+		7 | 9 | 1[0-5])
+			declare -g background_dark_or_light=light
+			;;
+		*)
+			declare -g background_dark_or_light=
+			;;
+	esac
+
 	# globals
 	declare -g padding="" left_marker="[" right_marker="]"
 	declare -g normal_color="\x1B[0m" gray_color="\e[1;30m" # "bright black", which is grey
 	declare -g bright_red_color="\e[1;31m" red_color="\e[0;31m"
 	declare -g bright_blue_color="\e[1;34m" blue_color="\e[0;34m"
 	declare -g bright_magenta_color="\e[1;35m" magenta_color="\e[0;35m"
-	declare -g bright_yellow_color="\e[1;33m" yellow_color="\e[0;33m"
+	case "${background_dark_or_light}" in
+		light)
+			# bold dim yellow, to ensure readability
+			declare -g bright_yellow_color="\e[1;2;33m"
+			declare -g yellow_color="\e[0;33m"
+			;;
+		*)
+			declare -g bright_yellow_color="\e[1;33m"
+			declare -g yellow_color="\e[0;33m"
+			;;
+	esac
+
 	declare -g ansi_reset_color="\e[0m"
 	declare -g -i logging_section_counter=0 # -i: integer
 	declare -g tool_color="${normal_color}" # default to normal color.
@@ -65,17 +89,18 @@ function logging_error_show_log() {
 		echo "::endgroup::"
 	fi
 
-	if [[ -f "${logfile_to_show}" ]]; then
-		local prefix_sed_contents="${normal_color}${left_marker}${padding}👉${padding}${right_marker}    "
-		local prefix_sed_cmd="s/^/${prefix_sed_contents}/;"
-		CURRENT_LOGFILE="" display_alert "    👇👇👇 Showing logfile below 👇👇👇" "${logfile_to_show}" "err"
+	if [[ "${ANSI_COLOR}" != "none" ]]; then
+		if [[ -f "${logfile_to_show}" ]]; then
+			local prefix_sed_contents="${normal_color}${left_marker}${padding}👉${padding}${right_marker}    "
+			local prefix_sed_cmd="s/^/${prefix_sed_contents}/;"
+			CURRENT_LOGFILE="" display_alert "    👇👇👇 Showing logfile below 👇👇👇" "${logfile_to_show}" "err"
 
-		# shellcheck disable=SC2002 # my cat is great. thank you, shellcheck.
-		cat "${logfile_to_show}" | grep -v -e "^$" | sed -e "${prefix_sed_cmd}" 1>&2 # write it to stderr!!
+			grep -v -e "^$" "${logfile_to_show}" | sed -e "${prefix_sed_cmd}" 1>&2 # write it to stderr!!
 
-		CURRENT_LOGFILE="" display_alert "    👆👆👆 Showing logfile above 👆👆👆" "${logfile_to_show}" "err"
-	else
-		CURRENT_LOGFILE="" display_alert "✋ Error log not available at this stage of build" "check messages above" "debug"
+			CURRENT_LOGFILE="" display_alert "    👆👆👆 Showing logfile above 👆👆👆" "${logfile_to_show}" "err"
+		else
+			CURRENT_LOGFILE="" display_alert "✋ Error log not available at this stage of build" "check messages above" "debug"
+		fi
 	fi
 	return 0
 }

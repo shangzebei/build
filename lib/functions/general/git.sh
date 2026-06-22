@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: GPL-2.0
 #
-# Copyright (c) 2013-2023 Igor Pecovnik, igor@armbian.com
+# Copyright (c) 2013-2026 Igor Pecovnik, igor@armbian.com
 #
 # This file is a part of the Armbian Build Framework
 # https://github.com/armbian/build/
@@ -55,9 +55,9 @@ function improved_git_fetch() {
 function git_ensure_safe_directory() {
 	if [[ -n "$(command -v git)" ]]; then
 		local git_dir="$1"
-		display_alert "git: Marking all directories as safe, which should include" "$git_dir" "debug"
-		if ! grep -q "directory = \*" "${HOME}/.gitconfig" 2> /dev/null; then
-			git config --global --add safe.directory "*"
+		if [[ -e "$1/.git" ]]; then
+			display_alert "git: Marking all directories as safe, which should include" "$git_dir" "debug"
+			git config --global --get safe.directory "$1" > /dev/null || regular_git config --global --add safe.directory "$1"
 		fi
 	else
 		display_alert "git not installed" "a true wonder how you got this far without git - it will be installed for you" "warn"
@@ -86,7 +86,7 @@ function fetch_from_repo() {
 	local git_work_dir
 
 	# Set GitHub mirror before anything else touches $url
-	url=${url//'https://github.com/'/$GITHUB_SOURCE'/'}
+	url="$(echo "$url" | sed "s|^https://github.com/|${GITHUB_SOURCE}/|")"
 
 	# The 'offline' variable must always be set to 'true' or 'false'
 	local offline=false
@@ -240,6 +240,23 @@ function fetch_from_repo() {
 	display_alert "Fetched revision: fetched_revision:" "${fetched_revision}" "git"
 	display_alert "Fetched revision: fetched_revision_ts:" "${fetched_revision_ts}" "git"
 
+	# if FETCH_FROM_REPO_CALLBACK_IF_REF_MUTABLE is set, and the ref is not a sha1, invoke that callback.
+	if [[ "${FETCH_FROM_REPO_CALLBACK_IF_REF_MUTABLE:-"none"}" != "none" ]]; then
+		case $ref_type in
+			tag | commit) # do nothing
+				;;
+			*) # Complain
+				display_alert "FETCH_FROM_REPO_CALLBACK_IF_REF_MUTABLE is set, and the ref is not a sha1" "${url} ${ref_type} ${ref_name} - should be commit:${fetched_revision}" "debug"
+				"${FETCH_FROM_REPO_CALLBACK_IF_REF_MUTABLE}" "${url}" "${ref_type}" "${ref_name}" "${fetched_revision}"
+				;;
+		esac
+	fi
+
+	if [[ -f "${SRC}"/config/sources/git_sources.json && $ref_type == "branch" ]]; then
+		cached_revision=$(jq --raw-output '.[] | select(.source == "'$url'" and .branch == "'$ref_name'") |.sha1' "${SRC}"/config/sources/git_sources.json)
+		[[ -z "${cached_revision}" ]] || fetched_revision=${cached_revision}
+	fi
+
 	if [[ "${do_checkout:-"yes"}" == "yes" ]]; then
 		display_alert "git checking out revision SHA" "${fetched_revision}" "git"
 		regular_git checkout -f -q "${fetched_revision}" # Return the files that are tracked by git to the initial state.
@@ -259,20 +276,34 @@ function fetch_from_repo() {
 			else
 				display_alert "Updating submodules" "" "ext"
 				# FML: http://stackoverflow.com/a/17692710
-				for i in $(git config -f .gitmodules --get-regexp path | awk '{ print $2 }'); do
+				while read -r key path; do
+					# key is like: submodule.libfoo.path
+					# extract "libfoo" from "submodule.libfoo.path"
+					local name=${key#submodule.}   # -> libfoo.path
+					name=${name%.path}             # -> libfoo
+
 					cd "${git_work_dir}" || exit
+
 					local surl sref
-					surl=$(git config -f .gitmodules --get "submodule.$i.url")
-					sref=$(git config -f .gitmodules --get "submodule.$i.branch" || true)
+					surl=$(git config -f .gitmodules --get "submodule.${name}.url")
+					sref=$(git config -f .gitmodules --get "submodule.${name}.branch" || true)
+
 					if [[ -n $sref ]]; then
 						sref="branch:$sref"
 					else
 						sref="head"
 					fi
-					display_alert "Updating submodule" "$i - $surl - $sref" "git"
-					git_ensure_safe_directory "$workdir/$i"
-					fetch_from_repo "$surl" "$workdir/$i" "$sref"
-				done
+
+					display_alert "Updating submodule" "${name} - ${surl} - ${sref}" "git"
+					git_ensure_safe_directory "$workdir/$path"
+
+					if [[ "${GIT_FIXED_WORKDIR}" != "" ]]; then
+						GIT_FIXED_WORKDIR="${GIT_FIXED_WORKDIR}/${path}" fetch_from_repo "$surl" "$workdir/$path" "$sref"
+					else
+						fetch_from_repo "$surl" "$workdir/$path" "$sref"
+					fi
+
+				done < <(git config -f .gitmodules --get-regexp 'submodule\..*\.path')
 			fi
 		fi
 	else

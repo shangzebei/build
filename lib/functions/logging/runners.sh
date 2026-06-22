@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: GPL-2.0
 #
-# Copyright (c) 2013-2023 Igor Pecovnik, igor@armbian.com
+# Copyright (c) 2013-2026 Igor Pecovnik, igor@armbian.com
 #
 # This file is a part of the Armbian Build Framework
 # https://github.com/armbian/build/
@@ -37,8 +37,15 @@ function chroot_sdcard_apt_get_remove() {
 	DONT_MAINTAIN_APT_CACHE="yes" chroot_sdcard_apt_get remove "$@"
 }
 
+function chroot_sdcard_custom_with_apt_logic() {
+	declare command="${1}"
+	shift
+	chroot_command="${command}" chroot_sdcard_apt_get "$@"
+}
+
 function chroot_sdcard_apt_get() {
 	acng_check_status_or_restart # make sure apt-cacher-ng is running OK.
+	declare apt_get_command="${chroot_command:-"apt-get"}"
 	declare default_apt_logging="-qq"
 	if [[ "${SHOW_DEBUG}" == "yes" ]]; then
 		default_apt_logging=""
@@ -83,7 +90,7 @@ function chroot_sdcard_apt_get() {
 		prelude_clean_env=("env" "-i")
 	fi
 
-	local_apt_deb_cache_prepare "before 'apt-get $*'" # sets LOCAL_APT_CACHE_INFO
+	local_apt_deb_cache_prepare "before '${apt_get_command} $*'" # sets LOCAL_APT_CACHE_INFO
 	if [[ "${LOCAL_APT_CACHE_INFO[USE]}" == "yes" ]]; then
 		# prepare and mount apt cache dir at /var/cache/apt/archives in the SDCARD.
 		skip_error_info="yes" run_host_command_logged mkdir -pv "${LOCAL_APT_CACHE_INFO[SDCARD_DEBS_DIR]}" "${LOCAL_APT_CACHE_INFO[SDCARD_LISTS_DIR]}"
@@ -93,10 +100,25 @@ function chroot_sdcard_apt_get() {
 		skip_error_info="yes" run_host_command_logged mount --bind "${LOCAL_APT_CACHE_INFO[HOST_LISTS_DIR]}" "${LOCAL_APT_CACHE_INFO[SDCARD_LISTS_DIR]}"
 	fi
 
-	local chroot_apt_result=1
-	chroot_sdcard "${prelude_clean_env[@]}" DEBIAN_FRONTEND=noninteractive apt-get "${apt_params[@]}" "$@" && chroot_apt_result=0
+	declare -a extra_envs=("DEBIAN_FRONTEND=noninteractive")
+	# shellcheck disable=SC2154 # extra_apt_envs is defined in the caller
+	if [[ "${#extra_apt_envs[@]}" -gt 0 ]]; then
+		extra_envs+=("${extra_apt_envs[@]}")
+	else
+		display_alert "No extra envs for apt" "none" "debug"
+	fi
 
-	local_apt_deb_cache_prepare "after 'apt-get $*'" # sets LOCAL_APT_CACHE_INFO
+	display_alert "Extra envs for apt:" "${extra_envs[*]@Q}" "debug"
+
+	local chroot_apt_result=1
+	if [[ "${apt_get_command}" == "apt-get" ]]; then
+		chroot_sdcard "${prelude_clean_env[@]}" "${extra_envs[@]}" apt-get "${apt_params[@]}" "$@" && chroot_apt_result=0
+	else
+		# custom case: does not pass the apt parameters; but envs are passed normally.
+		chroot_sdcard "${prelude_clean_env[@]}" "${extra_envs[@]}" "${apt_get_command}" "$@" && chroot_apt_result=0
+	fi
+
+	local_apt_deb_cache_prepare "after '${apt_get_command} $*'" # sets LOCAL_APT_CACHE_INFO
 	if [[ "${LOCAL_APT_CACHE_INFO[USE]}" == "yes" ]]; then
 		display_alert "Unmounting apt deb cache dir" "${LOCAL_APT_CACHE_INFO[SDCARD_DEBS_DIR]}" "debug"
 		run_host_command_logged umount "${LOCAL_APT_CACHE_INFO[SDCARD_DEBS_DIR]}"
@@ -109,14 +131,21 @@ function chroot_sdcard_apt_get() {
 
 # please, please, unify around this function.
 function chroot_sdcard() {
-	raw_command="$*" raw_extra="chroot_sdcard" TMPDIR="" \
-		run_host_command_logged_raw chroot "${SDCARD}" /bin/bash -e -o pipefail -c "$*"
+	# LC_ALL/LANG/LANGUAGE: clear the host's locale before entering the
+	# chroot — the target rootfs usually hasn't generated the host's locale
+	# yet, producing noisy "bash: warning: setlocale: LC_ALL: cannot change
+	# locale" on every chroot_sdcard call. Individual commands that need a
+	# specific locale (dpkg-divert, locale-gen) set LC_ALL=C explicitly.
+	# SUDO_USER: clear so chroot commands don't try to look up the host
+	# builder's username (which doesn't exist inside the rootfs).
+	raw_command="$*" raw_extra="chroot_sdcard" TMPDIR="" LC_ALL="C" LANG="C" LANGUAGE="" SUDO_USER="" \
+		run_host_command_logged_raw chroot "${SDCARD}" /usr/bin/env bash -e -o pipefail -c "$*"
 }
 
 # please, please, unify around this function.
 function chroot_mount() {
-	raw_command="$*" raw_extra="chroot_mount" TMPDIR="" \
-		run_host_command_logged_raw chroot "${MOUNT}" /bin/bash -e -o pipefail -c "$*"
+	raw_command="$*" raw_extra="chroot_mount" TMPDIR="" LC_ALL="C" LANG="C" LANGUAGE="" SUDO_USER="" \
+		run_host_command_logged_raw chroot "${MOUNT}" /usr/bin/env bash -e -o pipefail -c "$*"
 }
 
 # This should be used if you need to capture the stdout produced by the command. It is NOT logged, and NOT run thru bash, and NOT quoted.
@@ -127,13 +156,13 @@ function chroot_sdcard_with_stdout() {
 function chroot_custom_long_running() { # any pipe causes the left-hand side to subshell and caos ensues. it's just like chroot_custom()
 	local target=$1
 	shift
-	raw_command="$*" raw_extra="chroot_custom_long_running" TMPDIR="" run_host_command_logged_raw chroot "${target}" /bin/bash -e -o pipefail -c "$*"
+	raw_command="$*" raw_extra="chroot_custom_long_running" TMPDIR="" LC_ALL="C" LANG="C" LANGUAGE="" SUDO_USER="" run_host_command_logged_raw chroot "${target}" /usr/bin/env bash -e -o pipefail -c "$*"
 }
 
 function chroot_custom() {
 	local target=$1
 	shift
-	raw_command="$*" raw_extra="chroot_custom" TMPDIR="" run_host_command_logged_raw chroot "${target}" /bin/bash -e -o pipefail -c "$*"
+	raw_command="$*" raw_extra="chroot_custom" TMPDIR="" LC_ALL="C" LANG="C" LANGUAGE="" SUDO_USER="" run_host_command_logged_raw chroot "${target}" /usr/bin/env bash -e -o pipefail -c "$*"
 }
 
 # For installing packages host-side. Not chroot!
@@ -151,41 +180,65 @@ function host_apt_get() {
 # For host-side invocations of binaries we _know_ are x86-only.
 # Determine if we're building on non-amd64, and if so, which qemu binary to use.
 function run_host_x86_binary_logged() {
-	local -a qemu_invocation target_bin_arch
+	local -a qemu_invocation
+	local target_bin_arch target_bin_desc qemu_arch qemu_bin qemu_ld_prefix invoked_bin
 	target_bin_arch="unknown - file util missing"
+	invoked_bin="$1"
 	if [[ -f /usr/bin/file ]]; then
-		target_bin_arch="$(file -b "$1" | cut -d "," -f 1,2 | xargs echo -n)" # obtain the ELF name from the binary using 'file'
+		target_bin_desc="$(file -b "${invoked_bin}")"
+		target_bin_arch="$(echo $target_bin_desc | cut -d ',' -f 1,2 | tr -d '\n')" # obtain the ELF name from the binary using 'file'
+	else
+		exit_with_error "file util missing"
 	fi
 	qemu_invocation=("$@")                   # Default to calling directly, without qemu.
 	if [[ "$(uname -m)" != "x86_64" ]]; then # If we're NOT on x86...
-		if [[ -f /usr/bin/qemu-x86_64-static ]]; then
-			display_alert "Using qemu-x86_64-static for running on $(uname -m)" "$1 (${target_bin_arch})" "debug"
-			qemu_invocation=("/usr/bin/qemu-x86_64-static" "-L" "/usr/x86_64-linux-gnu" "$@")
-		elif [[ -f /usr/bin/qemu-x86_64 ]]; then
-			display_alert "Using qemu-x86_64 (non-static) for running on $(uname -m)" "$1 (${target_bin_arch})" "debug"
-			qemu_invocation=("/usr/bin/qemu-x86_64" "-L" "/usr/x86_64-linux-gnu" "$@")
+		case "${target_bin_arch}" in
+			*"x86-64"*) qemu_arch='x86_64' ;;
+			*"80386"*)  qemu_arch='i386' ;;
+			*"i386"*)   qemu_arch='i386' ;;
+			*)
+				exit_with_error "Unexpected binary architecture (${target_bin_arch}) for '${invoked_bin}'"
+				;;
+		esac
+		#FIXME: check if qemu_ld_prefix exists? Note that some vendor binaries may be statically linked
+		qemu_ld_prefix="/usr/${qemu_arch}-linux-gnu"
+
+		if [[ -f /usr/bin/qemu-${qemu_arch}-static ]]; then
+			qemu_bin="/usr/bin/qemu-${qemu_arch}-static"
+		elif [[ -f /usr/bin/qemu-${qemu_arch} ]]; then
+			qemu_bin="/usr/bin/qemu-${qemu_arch}"
 		else
 			exit_with_error "Can't find appropriate qemu binary for running '$1' on $(uname -m), missing packages?"
+		fi
+		display_alert "Using $qemu_bin for running on $(uname -m)" "$1 (${target_bin_arch})" "debug"
+		if [[ "${target_bin_desc}" == *"statically linked"* ]]; then
+			qemu_invocation=("$qemu_bin" "$@")
+		elif [[ -d "${qemu_ld_prefix}" ]]; then
+			qemu_invocation=("$qemu_bin" "-L" "${qemu_ld_prefix}" "$@")
+		else
+			exit_with_error "Missing cross-libs at ${qemu_ld_prefix}"
 		fi
 	else
 		display_alert "Not using qemu for running x86 binary on $(uname -m)" "$1 (${target_bin_arch})" "debug"
 	fi
-	run_host_command_logged "${qemu_invocation[@]}" # Exit with this result code
+	local -a actual_invocation=('env' '-u' 'QEMU_CPU' "${qemu_invocation[@]}")
+	# `env -u QEMU_CPU` will unset any possible specified CPUs to emulate, as in config/sources/arm64.conf
+	run_host_command_logged "${actual_invocation[*]@Q}" # Exit with this result code
 }
 
 # Run simple and exit with it's code. Exactly the same as run_host_command_logged(). Used to have pv pipe, but that causes chaos.
 function run_host_command_logged_long_running() {
-	raw_command="${raw_command:-"$*"}" run_host_command_logged_raw /bin/bash -e -o pipefail -c "$*"
+	raw_command="${raw_command:-"$*"}" run_host_command_logged_raw /usr/bin/env bash -e -o pipefail -c "$*"
 }
 
 # run_host_command_logged is the very basic, should be used for everything, but, please use helpers above, this is very low-level.
 function run_host_command_logged() {
-	raw_command="${raw_command:-"$*"}" run_host_command_logged_raw /bin/bash -e -o pipefail -c "$*"
+	raw_command="${raw_command:-"$*"}" run_host_command_logged_raw /usr/bin/env bash -e -o pipefail -c "$*"
 }
 
 # for interactive, dialog-like host-side invocations. no redirections performed, but same bash usage and expansion, for consistency.
 function run_host_command_dialog() {
-	/bin/bash -e -o pipefail -c "$*"
+	/usr/bin/env bash -e -o pipefail -c "$*"
 }
 
 # do NOT use directly, it does NOT expand the way it should (through bash)
@@ -235,9 +288,14 @@ function logging_enrich_run_command_error_info() {
 	for path in "${if_error_find_files_sdcard[@]}"; do
 		display_alert "Searching for if_error_find_files_sdcard files" "${SDCARD}/${path}" "debug"
 		declare -a sdcard_files
-		# shellcheck disable=SC2086 # I wanna expand, thank you...
-		mapfile -t sdcard_files < <(find ${SDCARD}/${path} -type f)
-		display_alert "Found if_error_find_files_sdcard files" "${sdcard_files[@]}" "debug"
+		if [[ "${path}" == /* ]]; then # if path begins with a slash, we need to use path-matching and prepend an "*" asterisk.
+			mapfile -t sdcard_files < <(find "${SDCARD}" -type f -path "*${path}")
+		else # if path does not begin with a slash, we need to use name-matching.
+			mapfile -t sdcard_files < <(find "${SDCARD}" -type f -name "${path}")
+		fi
+		declare -i num_files_found=0
+		num_files_found="${#sdcard_files[@]}"
+		display_alert "Found if_error_find_files_sdcard files" "${num_files_found} files: ${sdcard_files[*]}" "err"
 		found_files+=("${sdcard_files[@]}") # add to result
 	done
 

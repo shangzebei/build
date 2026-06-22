@@ -2,17 +2,27 @@
 #
 # SPDX-License-Identifier: GPL-2.0
 #
-# Copyright (c) 2013-2023 Igor Pecovnik, igor@armbian.com
+# Copyright (c) 2013-2026 Igor Pecovnik, igor@armbian.com
 #
 # This file is a part of the Armbian Build Framework
 # https://github.com/armbian/build/
 
-#!/usr/bin/env bash
-
-# The whole of this is Copyright (c) 2020-2023 Ricardo Pardini <ricardo@pardini.net>
+# The whole of this is Copyright (c) 2020-2026 Ricardo Pardini <ricardo@pardini.net>
 # This file is licensed under the terms of the GNU General Public
 # License version 2. This program is licensed "as is" without any
 # warranty of any kind, whether express or implied.
+
+# unsets a hook function, but if it doesn't exist makes a big mess[age]
+# helps deal with refactors and code-drift
+function extension_hook_opt_out() {
+	local hook_name="$1"
+	if [[ "$(type -t ${hook_name})" == 'function' ]]; then
+		unset -f "$hook_name"
+	else
+		# die noisily
+		exit_with_error "cannot find hook function specified in ${BASH_SOURCE[1]}:${BASH_LINENO[0]}" "extension_hook_opt_out(${hook_name})"
+	fi
+}
 
 function extension_manager_declare_globals() {
 	# global variables managing the state of the extension manager. treat as private.
@@ -59,7 +69,7 @@ function call_extension_method() {
 	done
 }
 
-function dump_extension_method_sources_functions() {
+function dump_extension_method_sources_function() {
 	declare hook_name="${1}"
 	declare dump_source_hook_function="dump_custom_sources_extension_hooks_${hook_name}"
 
@@ -84,6 +94,13 @@ function dump_extension_method_sources_functions() {
 
 	unset dump_body_sans_function_header_or_trailer
 	return 0 # always success
+}
+
+function dump_extension_method_sources_functions() {
+	for hook_name in "${@}"; do
+		display_alert "Extensions hook to expand source" "${hook_name}" "debug"
+		dump_extension_method_sources_function ${hook_name}
+	done
 }
 
 function dump_extension_method_sources_body() {
@@ -124,7 +141,8 @@ function initialize_extension_manager() {
 	# before starting, auto-add extensions specified (eg, on the command-line) via the ENABLE_EXTENSIONS or EXT env var. Do it only once.
 	[[ ${initialize_extension_manager_counter} -lt 1 ]] && [[ "${ENABLE_EXTENSIONS:-"${EXT}"}" != "" ]] && {
 		local auto_extension
-		for auto_extension in $(echo "${ENABLE_EXTENSIONS:-"${EXT}"}" | tr "," " "); do
+		local _enable_csv="${ENABLE_EXTENSIONS:-"${EXT}"}"
+		for auto_extension in ${_enable_csv//,/ }; do
 			ENABLE_EXTENSION_TRACE_HINT="ENABLE_EXTENSIONS/EXT -> " enable_extension "${auto_extension}"
 		done
 	}
@@ -425,7 +443,7 @@ function write_hook_point_metadata() {
 
 # can be called by board, family, config or user to make sure an extension is included.
 # single argument is the extension name.
-# will look for it in /userpatches/extensions first.
+# will look for it in ${USERPATCHES_PATH}/extensions first.
 # if not found there will look in /extensions
 # if not found will exit 17
 function enable_extension() {
@@ -457,7 +475,9 @@ function enable_extension() {
 	enable_extension_recurse_counter=$((enable_extension_recurse_counter + 1))
 
 	# there are many opportunities here. too many, actually. let userpatches override just some functions, etc.
-	for extension_base_path in "${SRC}/userpatches/extensions" "${SRC}/extensions"; do
+	for extension_base_path in "${USERPATCHES_PATH}/extensions" "${SRC}/extensions"; do
+		[[ -d "${extension_base_path}" ]] || continue
+
 		extension_dir="${extension_base_path}/${extension_name}"
 		extension_file_in_dir="${extension_dir}/${extension_name}.sh"
 		extension_floating_file="${extension_base_path}/${extension_name}.sh"
@@ -469,6 +489,14 @@ function enable_extension() {
 			extension_dir="${extension_base_path}" # this is misleading. only directory-based extensions should have this.
 			extension_file="${extension_floating_file}"
 			break
+		else
+			# Search for the extension file in any subdirectory
+			extension_file=$(find "${extension_base_path}" -type f -name "${extension_name}.sh" | head -n 1) # Example format: extensions/network/net-network-manager.sh
+			if [[ -n "${extension_file}" ]]; then
+				# Extract extension dir from file, e.g. from "extensions/network/net-network-manager.sh" the dir "extensions/network/" gets extracted
+				extension_dir="${extension_file%/*}"
+				break
+			fi
 		fi
 	done
 
@@ -493,12 +521,14 @@ function enable_extension() {
 	after_function_list="$(compgen -A function)"
 
 	# compare before and after, thus getting the functions defined by the extension.
-	# comm is oldskool. we like it. go "man comm" to understand -13 below
-	new_function_list="$(comm -13 <(echo "$before_function_list" | sort) <(echo "$after_function_list" | sort))"
+	# Avoid comm for uutils coreutils compatibility
+	new_function_list="$(grep -vxFf <(echo "$before_function_list") <(echo "$after_function_list") || true)"
 
 	# iterate over defined functions, store them in global associative array extension_function_info
 	for newly_defined_function in ${new_function_list}; do
-		#echo "func: ${newly_defined_function} has DIR: ${extension_dir}"
+		# Check if "${newly_defined_function}" is already defined in the extension_function_info array, if not, add it
+		# This is to address the recursive case messing up references
+		[[ -v extension_function_info["${newly_defined_function}"] ]] && continue
 		extension_function_info["${newly_defined_function}"]="EXTENSION=\"${extension_name}\" EXTENSION_DIR=\"${extension_dir}\" EXTENSION_FILE=\"${extension_file}\" EXTENSION_ADDED_BY=\"${stacktrace}\""
 	done
 
@@ -517,7 +547,7 @@ function enable_extension() {
 # The reasoning is simple: during Dockerfile build, we wanna have all the hostdeps defined, even if we're not gonna use them.
 function enable_all_extensions_builtin_and_user() {
 	declare -a extension_list=()
-	declare -a ext_dirs=("${SRC}/extensions" "${SRC}/userpatches/extensions")
+	declare -a ext_dirs=("${SRC}/extensions" "${USERPATCHES_PATH}/extensions")
 	declare -a ignore_extensions=("sample-extension")
 
 	# Extensions are files of the format <dir>/extension_name.sh or <dir>/extension_name/extension_name.sh
@@ -526,6 +556,46 @@ function enable_all_extensions_builtin_and_user() {
 			declare -a ext_list_dir=()
 			mapfile -t ext_list_dir < <(find "${ext_dir}" -maxdepth 2 -type f -name "*.sh")
 			extension_list+=("${ext_list_dir[@]}")
+		fi
+	done
+
+	# loop over the files found; remove the prefix
+	for extension_file in "${extension_list[@]}"; do
+		extension_file="${extension_file#${SRC}/}"
+		extension_file="${extension_file%.sh}"
+		extension_name="${extension_file##*/}"
+		# skip, if extension_name is in the ignore_extensions array
+		if [[ " ${ignore_extensions[*]} " == *" ${extension_name} "* ]]; then
+			continue
+		fi
+		# enable the extensions, quietly.
+		enable_extension_quiet="yes" enable_extension "${extension_name}"
+	done
+}
+
+# This looks up and enables extensions containing function hooks passed in as arguments.
+# The reasoning is simple: during Dockerfile build, we wanna have all the hostdeps defined, even if we're not gonna use them.
+function enable_extensions_with_hostdeps_builtin_and_user() {
+	declare -a searched_hook_names=("${@}") #eg: "add_host_dependencies" "host_dependencies_known"
+	declare -a grep_args=()
+	for hook_name in "${searched_hook_names[@]}"; do
+		grep_args+=("-e" "^function ${hook_name}__")
+	done
+
+	declare -a extension_list=()
+	declare -a ext_dirs=("${SRC}/extensions" "${USERPATCHES_PATH}/extensions")
+	declare -a ignore_extensions=("sample-extension")
+
+	# Extensions are files of the format <dir>/extension_name.sh or <dir>/extension_name/extension_name.sh
+	for ext_dir in "${ext_dirs[@]}"; do
+		display_alert "Extension search" "Searching in directory: \"${ext_dir}\"" ""
+		if [[ -d "${ext_dir}" ]]; then
+			declare -a ext_list_dir=()
+			mapfile -t ext_list_dir < <(find "${ext_dir}" -maxdepth 2 -type f -name "*.sh" -print0 | xargs -0 -r grep -l "${grep_args[@]}" 2>/dev/null || true)
+			display_alert "Extension search result" "Found ${#ext_list_dir[@]} extensions in \"${ext_dir}\"" ""
+			extension_list+=("${ext_list_dir[@]}")
+		else
+			display_alert "Extension search" "Directory does not exist: \"${ext_dir}\"" "wrn"
 		fi
 	done
 

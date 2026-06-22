@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: GPL-2.0
 #
-# Copyright (c) 2013-2023 Igor Pecovnik, igor@armbian.com
+# Copyright (c) 2013-2026 Igor Pecovnik, igor@armbian.com
 #
 # This file is a part of the Armbian Build Framework
 # https://github.com/armbian/build/
@@ -10,13 +10,33 @@
 function artifact_rootfs_config_dump() {
 	artifact_input_variables[ARCH]="${ARCH}"
 	artifact_input_variables[RELEASE]="${RELEASE}"
-	artifact_input_variables[CACHE_TYPE]="${cache_type:-"no_cache_type_yet"}"
+	artifact_input_variables[SELECTED_CONFIGURATION]="${SELECTED_CONFIGURATION}" # should be represented below anyway
+	artifact_input_variables[BUILD_MINIMAL]="${BUILD_MINIMAL}"
+	artifact_input_variables[DESKTOP_ENVIRONMENT]="${DESKTOP_ENVIRONMENT:-"no_DESKTOP_ENVIRONMENT_set"}"
+	artifact_input_variables[DESKTOP_TIER]="${DESKTOP_TIER:-"no_DESKTOP_TIER_set"}"
+
+	# Track the latest commit touching configng's desktop definitions.
+	# Any change to YAML, parser, or module code in tools/modules/desktops/
+	# invalidates the desktop rootfs cache — the package list, browser
+	# mapping, tier overrides, or branding may have changed.
+	if [[ "${BUILD_DESKTOP}" == "yes" ]]; then
+		declare configng_desktops_hash="undetermined"
+		local configng_dir="${SRC}/cache/sources/armbian-configng"
+		if [[ -d "${configng_dir}/.git" ]]; then
+			configng_desktops_hash="$(git -C "${configng_dir}" log -1 --format=%H -- tools/modules/desktops/ 2>/dev/null || echo "unknown")"
+		fi
+		artifact_input_variables[CONFIGNG_DESKTOPS_HASH]="${configng_desktops_hash}"
+	fi
+
+	# Hash of the packages added/removed by extensions
+	declare pkgs_hash="undetermined"
+	pkgs_hash="$(echo "${REMOVE_PACKAGES[*]} ${EXTRA_PACKAGES_ROOTFS[*]} ${PACKAGE_LIST_BOARD_REMOVE} ${PACKAGE_LIST_FAMILY_REMOVE}" | sha256sum | cut -d' ' -f1)"
+	artifact_input_variables[EXTRA_PKG_ADD_REMOVE_HASH]="${pkgs_hash}"
 }
 
 function artifact_rootfs_prepare_version() {
 	artifact_version="undetermined"        # outer scope
 	artifact_version_reason="undetermined" # outer scope
-	[[ -z "${artifact_prefix_version}" ]] && exit_with_error "artifact_prefix_version is not set"
 
 	assert_requires_aggregation # Bombs if aggregation has not run
 
@@ -24,7 +44,7 @@ function artifact_rootfs_prepare_version() {
 
 	calculate_rootfs_cache_id # sets rootfs_cache_id
 
-	display_alert "Going to build rootfs" "packages_hash: '${packages_hash:-}' cache_type: '${cache_type:-}' rootfs_cache_id: '${rootfs_cache_id}'" "info"
+	display_alert "rootfs version" "packages_hash: '${packages_hash:-}' cache_type: '${cache_type:-}' rootfs_cache_id: '${rootfs_cache_id}'" "info"
 
 	declare -a reasons=(
 		"arch \"${ARCH}\""
@@ -33,16 +53,24 @@ function artifact_rootfs_prepare_version() {
 		"cache_id \"${rootfs_cache_id}\""
 	)
 
-	# @TODO: "rootfs_cache_id" contains "cache_type", split so we don't repeat ourselves
-	# @TODO: gotta include the extensions rootfs-modifying id to cache_type...
+	# add more reasons for desktop stuff
+	if [[ "${DESKTOP_ENVIRONMENT}" != "" ]]; then
+		reasons+=("desktop_environment \"${DESKTOP_ENVIRONMENT}\"")
+		reasons+=("desktop_tier \"${DESKTOP_TIER}\"")
+		reasons+=("configng_desktops \"${artifact_input_variables[CONFIGNG_DESKTOPS_HASH]:-none}\"")
+	fi
+
+	# we use YYYYMM to make a new rootfs cache version per-month, even if nothing else changes.
+	declare yyyymm="undetermined"
+	yyyymm="$(date +%Y%m)"
 
 	# outer scope
-	artifact_version="${artifact_prefix_version}${rootfs_cache_id}"
+	artifact_version="${yyyymm}-${rootfs_cache_id}"
 	artifact_version_reason="${reasons[*]}"
-	artifact_name="${ARCH}-${RELEASE}-${cache_type}"
+	artifact_name="rootfs-${ARCH}-${RELEASE}-${cache_type}"
 	artifact_type="tar.zst"
 	artifact_base_dir="${SRC}/cache/rootfs"
-	artifact_final_file="${SRC}/cache/rootfs/${ARCH}-${RELEASE}-${rootfs_cache_id}.tar.zst"
+	artifact_final_file="${SRC}/cache/rootfs/${artifact_name}_${artifact_version}.tar.zst"
 
 	return 0
 }
@@ -99,15 +127,16 @@ function artifact_rootfs_cli_adapter_pre_run() {
 }
 
 function artifact_rootfs_cli_adapter_config_prep() {
+	declare -g artifact_version_requires_aggregation="yes"
 	declare -g ROOTFS_COMPRESSION_RATIO="${ROOTFS_COMPRESSION_RATIO:-"15"}" # default to Compress stronger when we make rootfs cache
 
 	# If BOARD is set, use it to convert to an ARCH.
 	if [[ -n ${BOARD} ]]; then
-		display_alert "BOARD is set, converting to ARCH for rootfs building" "'BOARD=${BOARD}'" "warn"
+		display_alert "BOARD is set, converting to ARCH for rootfs building" "'BOARD=${BOARD}'" "info"
 		# Convert BOARD to ARCH; source the BOARD and FAMILY stuff
 		LOG_SECTION="config_source_board_file" do_with_conditional_logging config_source_board_file
 		LOG_SECTION="source_family_config_and_arch" do_with_conditional_logging source_family_config_and_arch
-		display_alert "Done sourcing board file" "'${BOARD}' - arch: '${ARCH}'" "warn"
+		display_alert "Done sourcing board file" "'${BOARD}' - arch: '${ARCH}'" "info"
 	fi
 
 	declare -a vars_need_to_be_set=("RELEASE" "ARCH")
@@ -122,6 +151,19 @@ function artifact_rootfs_cli_adapter_config_prep() {
 	declare -g -r RELEASE="${RELEASE}" # make readonly for finding who tries to change it
 	declare -g -r NEEDS_BINFMT="yes"   # make sure binfmts are installed during prepare_host_interactive
 
+	# Don't force SKIP_ARMBIAN_REPO=yes for rootfs artifact builds anymore.
+	# The new desktop install path (module_desktops install mode=build,
+	# invoked from rootfs-create.sh) needs apt.armbian.com's
+	# <release>-utils (armbian-config itself) and <release>-desktop
+	# (firefox, chromium, gnome-branded bits) components to be reachable
+	# while the rootfs is being assembled. Default to "no" (repo ON)
+	# and let boards/userpatches opt out explicitly if they still need
+	# the repo-free rootfs behaviour for whatever reason.
+	declare -g SKIP_ARMBIAN_REPO="${SKIP_ARMBIAN_REPO:-no}"
+	declare -g -r SKIP_ARMBIAN_REPO # make it readonly to ensure sanity if hooks try to change it
+
+	track_general_config_variables "in artifact_rootfs_cli_adapter_config_prep"
+
 	# prep_conf_main_only_rootfs_ni is prep_conf_main_only_rootfs_ni() + mark_aggregation_required_in_default_build_start()
 	prep_conf_main_only_rootfs_ni < /dev/null # no stdin for this, so it bombs if tries to be interactive.
 
@@ -132,7 +174,7 @@ function artifact_rootfs_cli_adapter_config_prep() {
 }
 
 function artifact_rootfs_get_default_oci_target() {
-	artifact_oci_target_base="ghcr.io/armbian/cache-root/"
+	artifact_oci_target_base="${GHCR_SOURCE}/armbian/os/"
 }
 
 function artifact_rootfs_is_available_in_local_cache() {

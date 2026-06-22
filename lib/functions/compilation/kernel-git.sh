@@ -2,13 +2,13 @@
 #
 # SPDX-License-Identifier: GPL-2.0
 #
-# Copyright (c) 2013-2023 Igor Pecovnik, igor@armbian.com
+# Copyright (c) 2013-2026 Igor Pecovnik, igor@armbian.com
 #
 # This file is a part of the Armbian Build Framework
 # https://github.com/armbian/build/
 
 function kernel_prepare_git() {
-	[[ -z $KERNELSOURCE ]] && return 0 # do nothing if no kernel source... but again, why were we called then?
+	[[ "${KERNELSOURCE}" == 'none' ]] && return 0 # do nothing if no kernel source... but again, why were we called then?
 
 	# validate kernel_git_bare_tree is set
 	if [[ -z "${kernel_git_bare_tree}" ]]; then
