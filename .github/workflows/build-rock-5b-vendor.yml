@@ -66,18 +66,10 @@ jobs:
             ghcr.io/armbian/docker-armbian-build:armbian-ubuntu-noble-latest \
             ./compile.sh build BOARD=rock-5b BRANCH=vendor RELEASE=trixie BUILD_DESKTOP=no BUILD_MINIMAL=no KERNEL_CONFIGURE=no SHARE_LOG=yes
 
-      - name: Upload artifacts
+      - name: Upload output
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: rock-5b-vendor-images
-          path: output/images/
-          retention-days: 7
-
-      - name: Upload logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: rock-5b-vendor-logs
-          path: output/logs/
+          name: rock-5b-vendor-output
+          path: output/
           retention-days: 7
